@@ -2,7 +2,6 @@ import datetime
 from firebase_admin import firestore
 from google.cloud.firestore_v1.vector import Vector
 from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
-from app.services.gemini_service import get_embedding
 
 # Retrieve the active Firestore client
 db = firestore.client()
@@ -82,6 +81,8 @@ def search_similar_notes(user_id: str, query: str, limit: int = 5) -> list[dict]
     Performs a native Firestore vector search query using COSINE similarity.
     This fetches the nearest matching journal entries semantically.
     """
+    # Import get_embedding locally to prevent circular import at module load
+    from app.services.gemini_service import get_embedding
     query_vector = get_embedding(query)
     
     # Perform Firestore native vector query

@@ -184,3 +184,64 @@ def generate_chat_response(messages: list[dict], user_id: str) -> str:
     finally:
         # Reset the context variable to prevent memory leaks
         current_user_id.reset(token)
+
+def generate_chat_response_stream(messages: list[dict], user_id: str):
+    """
+    Generator function that calls Gemini 2.5 Flash with streaming and automatic function calling,
+    yielding chunks of text as Server-Sent Events.
+    """
+    if not client:
+        raise ValueError("Gemini Client is not initialized. Please set GEMINI_API_KEY in your .env file.")
+        
+    # Set the user context token for the duration of this request
+    token = current_user_id.set(user_id)
+    
+    try:
+        contents = []
+        for msg in messages:
+            role = "user" if msg["role"] == "user" else "model"
+            contents.append(
+                types.Content(
+                    role=role,
+                    parts=[types.Part.from_text(text=msg["content"])]
+                )
+            )
+            
+        system_instruction = (
+            "You are a compassionate, insightful wellness analytics companion for the MoodBook app. "
+            "Your goal is to help users understand their mood patterns, emotional trends, and history. "
+            "You have access to tools that query their actual journal entries, date ranges, and analytics. "
+            "Always use these tools to back up your claims with evidence. Mention date citations in your "
+            "responses (e.g. 'On June 18th you noted...'). "
+            "Keep your tone empathetic, supportive, and objective. "
+            "CRITICAL: You are a wellness assistant, NOT a medical therapist or diagnostic tool. "
+            "If a user expresses severe depressive symptoms or self-harm thoughts, recommend contacting professional crisis lines."
+        )
+        
+        config = types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            tools=[
+                search_journal_entries,
+                get_recent_mood_entries,
+                get_mood_entries_by_date_range,
+                get_mood_entries_by_emotion,
+                run_mood_analytics,
+                run_period_comparison
+            ],
+            temperature=0.2
+        )
+        
+        # Use generate_content_stream to get tokens in real-time
+        response_stream = client.models.generate_content_stream(
+            model="gemini-2.5-flash",
+            contents=contents,
+            config=config
+        )
+        
+        for chunk in response_stream:
+            if chunk.text:
+                yield chunk.text
+                
+    finally:
+        # Reset the context variable to prevent memory leaks
+        current_user_id.reset(token)
