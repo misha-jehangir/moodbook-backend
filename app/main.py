@@ -1,5 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from app.config import settings
+from app.auth.firebase_auth import get_current_user
 
 app = FastAPI(
     title="MoodBook AI Companion API",
@@ -13,4 +14,13 @@ async def health_check():
         "status": "healthy",
         "service": "moodbook-backend",
         "config_loaded": settings.is_valid
+    }
+
+@app.get("/test-auth")
+async def test_auth(user: dict = Depends(get_current_user)):
+    return {
+        "status": "authenticated",
+        "uid": user.get("uid"),
+        "email": user.get("email"),
+        "name": user.get("name")
     }
