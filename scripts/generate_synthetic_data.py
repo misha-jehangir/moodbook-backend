@@ -2,6 +2,7 @@ import datetime
 import random
 import json
 import os
+import argparse
 
 # Define Taxonomies (Matching Flutter Models)
 MOODS = ['Terrible', 'Bad', 'Neutral', 'Good', 'Excellent']
@@ -223,7 +224,12 @@ def generate_entry(dt, phase, is_winter, is_weekend, time_slot):
     }
 
 def main():
-    print("Starting synthetic data generation...")
+    parser = argparse.ArgumentParser(description="Generate and upload synthetic mood logs to Firestore.")
+    parser.add_argument("--uid", type=str, default="IAIQRkIqfzdV8MGmDG6BCP3yTnG2", help="The target Firebase User UID.")
+    parser.add_argument("--upload", action="store_true", help="Upload the generated data to Firestore.")
+    args = parser.parse_args()
+
+    print(f"Starting synthetic data generation (Target UID: {args.uid})...")
     
     # 3 Years Timeline
     start_date = datetime.date(2023, 6, 30)
@@ -316,6 +322,7 @@ def main():
             else:
                 entry = generate_entry(dt, phase, is_winter, is_weekend, slot)
                 
+            entry["userId"] = args.uid
             entries.append(entry)
 
         current_date += delta
@@ -341,6 +348,50 @@ def main():
     for mood, count in mood_counts.items():
         percentage = (count / len(entries)) * 100
         print(f" - {mood}: {count} ({percentage:.2f}%)")
+
+    # Firebase Upload Logic
+    if args.upload:
+        try:
+            import firebase_admin
+            from firebase_admin import credentials, firestore
+        except ImportError:
+            print("\nError: firebase-admin library is not installed. Please run:")
+            print("  pip install firebase-admin")
+            return
+
+        cred_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "service-account.json")
+        if not os.path.exists(cred_path):
+            print(f"\nError: service-account.json not found at: {cred_path}")
+            print("Please download your Firebase Admin service account key and save it as 'service-account.json' in the backend root.")
+            return
+
+        print(f"\nInitializing Firebase Admin SDK using key: {cred_path}...")
+        cred = credentials.Certificate(cred_path)
+        firebase_admin.initialize_app(cred)
+        db = firestore.client()
+
+        print("Uploading data to Firestore 'mood_entries' collection in batches of 500...")
+        batch_size = 500
+        total_entries = len(entries)
+
+        for i in range(0, total_entries, batch_size):
+            chunk = entries[i:i + batch_size]
+            batch = db.batch()
+
+            for entry in chunk:
+                doc_ref = db.collection('mood_entries').document()
+                
+                # Copy and convert timestamp to datetime object
+                entry_data = entry.copy()
+                dt_obj = datetime.datetime.fromisoformat(entry_data['timestamp'])
+                entry_data['timestamp'] = dt_obj
+                
+                batch.set(doc_ref, entry_data)
+
+            print(f" - Committing batch {i // batch_size + 1} of {(total_entries + batch_size - 1) // batch_size}...")
+            batch.commit()
+
+        print("\nAll mood entries uploaded successfully!")
 
 if __name__ == "__main__":
     main()
