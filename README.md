@@ -31,9 +31,9 @@ flowchart TD
     FastAPI -->|9. Server-Sent Events| Flutter
     Flutter -->|10. Stream tokens to UI| User
     
-    style Tools fill:#f9f,stroke:#333,stroke-width:2px
-    style Gemini fill:#bbf,stroke:#333,stroke-width:2px
-    style FastAPI fill:#bfb,stroke:#333,stroke-width:2px
+    style Tools fill:#f9f,stroke:#333,stroke-width:2px,color:#000
+    style Gemini fill:#bbf,stroke:#333,stroke-width:2px,color:#000
+    style FastAPI fill:#bfb,stroke:#333,stroke-width:2px,color:#000
 ```
 
 ---
