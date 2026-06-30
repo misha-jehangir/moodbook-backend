@@ -12,14 +12,15 @@ else:
 
 def get_embedding(text: str) -> list[float]:
     """
-    Generates a 768-dimension vector embedding for the input text using text-embedding-004.
+    Generates a 768-dimension vector embedding for the input text using gemini-embedding-001.
     """
     if not client:
         raise ValueError("Gemini Client is not initialized. Please set GEMINI_API_KEY in your .env file.")
     
     response = client.models.embed_content(
-        model="text-embedding-004",
-        contents=text
+        model="gemini-embedding-001",
+        contents=text,
+        config=types.EmbedContentConfig(output_dimensionality=768)
     )
     return response.embeddings[0].values
 
@@ -34,7 +35,8 @@ def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
         return []
     
     response = client.models.embed_content(
-        model="text-embedding-004",
-        contents=texts
+        model="gemini-embedding-001",
+        contents=texts,
+        config=types.EmbedContentConfig(output_dimensionality=768)
     )
     return [emb.values for emb in response.embeddings]
