@@ -1,6 +1,12 @@
 from google import genai
 from google.genai import types
 from app.config import settings
+import app.services.firestore_service as firestore_service
+import app.tools.analytics as analytics
+import contextvars
+
+# Request-scoped variable for Firebase User UID (thread-safe and async-safe)
+current_user_id = contextvars.ContextVar("current_user_id")
 
 # Initialize client if API key is provided
 client = None
@@ -40,3 +46,141 @@ def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
         config=types.EmbedContentConfig(output_dimensionality=768)
     )
     return [emb.values for emb in response.embeddings]
+
+# --- GEMINI TOOL DEFINITIONS ---
+
+def search_journal_entries(query: str, limit: int = 5) -> list[dict]:
+    """
+    Performs a semantic search on the user's past journal entries and notes to find matching events, thoughts, or topics.
+    Use this when the user asks about specific themes, feelings, conflicts, or memories (e.g., 'workplace conflict', 'office arguments', 'feeling lonely').
+    
+    Args:
+        query: The semantic search query phrase (e.g., 'disagreement with manager', 'problems sleeping').
+        limit: The max number of matching journal entries to retrieve (default is 5).
+    """
+    uid = current_user_id.get()
+    return firestore_service.search_similar_notes(user_id=uid, query=query, limit=limit)
+
+def get_recent_mood_entries(limit: int = 50) -> list[dict]:
+    """
+    Retrieves the user's most recent mood entries (containing moods, emotions, reasons/activities, and notes).
+    Use this to get a snapshot of the user's recent emotional state.
+    
+    Args:
+        limit: The number of entries to retrieve (default is 50).
+    """
+    uid = current_user_id.get()
+    return firestore_service.get_recent_entries(user_id=uid, limit=limit)
+
+def get_mood_entries_by_date_range(start_date: str, end_date: str) -> list[dict]:
+    """
+    Retrieves the user's mood entries between a start date and end date.
+    Use this when the user asks about a specific timeframe (e.g., 'show me entries from last week').
+    
+    Args:
+        start_date: Start date in ISO format (e.g., 'YYYY-MM-DD').
+        end_date: End date in ISO format (e.g., 'YYYY-MM-DD').
+    """
+    uid = current_user_id.get()
+    return firestore_service.get_entries_by_date_range(user_id=uid, start_date_str=start_date, end_date_str=end_date)
+
+def get_mood_entries_by_emotion(emotion: str, limit: int = 20) -> list[dict]:
+    """
+    Retrieves mood entries that contain the specified emotion tag (e.g., 'Anxious', 'Sad', 'Happy', 'Exhausted').
+    Use this when the user asks about occurrences of a specific emotion.
+    
+    Args:
+        emotion: The specific emotion tag to filter by. Must be capitalized (e.g. 'Sad', 'Anxious', 'Loved', 'Content').
+        limit: The max number of entries to retrieve (default is 20).
+    """
+    uid = current_user_id.get()
+    return firestore_service.get_entries_by_emotion(user_id=uid, emotion=emotion, limit=limit)
+
+def run_mood_analytics(start_date: str = None, end_date: str = None) -> dict:
+    """
+    Calculates deterministic mood averages and correlations between activities (reasons) or emotions and overall mood.
+    Use this when the user asks questions about trends, correlations, or patterns (e.g., 'what makes me happy?', 'what activities associate with my best moods?').
+    
+    Args:
+        start_date: Optional start date in ISO format (e.g., 'YYYY-MM-DD').
+        end_date: Optional end date in ISO format (e.g., 'YYYY-MM-DD').
+    """
+    uid = current_user_id.get()
+    if start_date and end_date:
+        entries = firestore_service.get_entries_by_date_range(user_id=uid, start_date_str=start_date, end_date_str=end_date)
+    else:
+        entries = firestore_service.get_recent_entries(user_id=uid, limit=100)
+    return analytics.calculate_correlations(entries)
+
+def run_period_comparison(current_start: str, current_end: str, past_start: str, past_end: str) -> dict:
+    """
+    Compares two time periods (e.g., this month vs last month) and returns their averages, difference, and progression.
+    Use this when the user asks to compare two specific timeframes (e.g., 'compare this month to last month').
+    """
+    uid = current_user_id.get()
+    curr_entries = firestore_service.get_entries_by_date_range(user_id=uid, start_date_str=current_start, end_date_str=current_end)
+    past_entries = firestore_service.get_entries_by_date_range(user_id=uid, start_date_str=past_start, end_date_str=past_end)
+    return analytics.compare_periods(curr_entries, past_entries)
+
+# --- GEMINI CHAT ORCHESTRATOR ---
+
+def generate_chat_response(messages: list[dict], user_id: str) -> str:
+    """
+    Generates a response from Gemini 2.5 Flash, automatically running any needed tools
+    and returning the final synthesized answer.
+    """
+    if not client:
+        raise ValueError("Gemini Client is not initialized. Please set GEMINI_API_KEY in your .env file.")
+        
+    # Set the user context token for the duration of this request
+    token = current_user_id.set(user_id)
+    
+    try:
+        # Convert incoming standard chat history into Gemini SDK types.Content structure
+        contents = []
+        for msg in messages:
+            role = "user" if msg["role"] == "user" else "model"
+            contents.append(
+                types.Content(
+                    role=role,
+                    parts=[types.Part.from_text(text=msg["content"])]
+                )
+            )
+            
+        # Configure the system instruction and tools
+        system_instruction = (
+            "You are a compassionate, insightful wellness analytics companion for the MoodBook app. "
+            "Your goal is to help users understand their mood patterns, emotional trends, and history. "
+            "You have access to tools that query their actual journal entries, date ranges, and analytics. "
+            "Always use these tools to back up your claims with evidence. Mention date citations in your "
+            "responses (e.g. 'On June 18th you noted...'). "
+            "Keep your tone empathetic, supportive, and objective. "
+            "CRITICAL: You are a wellness assistant, NOT a medical therapist or diagnostic tool. "
+            "If a user expresses severe depressive symptoms or self-harm thoughts, recommend contacting professional crisis lines."
+        )
+        
+        config = types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            tools=[
+                search_journal_entries,
+                get_recent_mood_entries,
+                get_mood_entries_by_date_range,
+                get_mood_entries_by_emotion,
+                run_mood_analytics,
+                run_period_comparison
+            ],
+            temperature=0.2 # Lower temperature for analytical queries
+        )
+        
+        # Generate content using automatic tool calling
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=contents,
+            config=config
+        )
+        
+        return response.text
+        
+    finally:
+        # Reset the context variable to prevent memory leaks
+        current_user_id.reset(token)
