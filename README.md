@@ -19,7 +19,7 @@ flowchart TD
     AdminSDK -->|5. Verified UID| FastAPI
     FastAPI -->|6. Start Generation| Gemini[Gemini 2.5 Flash]
     
-    subgraph RAG Tool Loop (Automatic calling)
+    subgraph RAG_LOOP ["RAG Tool Loop (Automatic calling)"]
     Gemini -->|7. Decides Tool Calls| Tools{Tools Router}
     Tools -->|Search similar entries| VectorSearch[Firestore Vector Search]
     Tools -->|Calculate stats/trends| Analytics[Deterministic Analytics]
