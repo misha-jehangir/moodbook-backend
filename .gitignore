@@ -50,6 +50,10 @@ ENV/
 env.bak/
 venv.bak/
 
+# Firebase credentials
+service-account.json
+*.json.key
+
 # IDEs and OS files
 .vscode/
 .idea/
@@ -57,3 +61,4 @@ venv.bak/
 *.swo
 .DS_Store
 Thumbs.db
+scripts/synthetic_mood_data.json
