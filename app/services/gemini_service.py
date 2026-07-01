@@ -75,25 +75,25 @@ def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
 
 # --- GEMINI TOOL DEFINITIONS ---
 
-def search_journal_entries(query: str, limit: int = 5) -> list[dict]:
+def search_journal_entries(query: str, limit: int) -> list[dict]:
     """
     Performs a semantic search on the user's past journal entries and notes to find matching events, thoughts, or topics.
     Use this when the user asks about specific themes, feelings, conflicts, or memories (e.g., 'workplace conflict', 'office arguments', 'feeling lonely').
     
     Args:
         query: The semantic search query phrase (e.g., 'disagreement with manager', 'problems sleeping').
-        limit: The max number of matching journal entries to retrieve (default is 5).
+        limit: The max number of matching journal entries to retrieve (e.g. 5).
     """
     uid = current_user_id.get()
     return firestore_service.search_similar_notes(user_id=uid, query=query, limit=limit)
 
-def get_recent_mood_entries(limit: int = 50) -> list[dict]:
+def get_recent_mood_entries(limit: int) -> list[dict]:
     """
     Retrieves the user's most recent mood entries (containing moods, emotions, reasons/activities, and notes).
     Use this to get a snapshot of the user's recent emotional state.
     
     Args:
-        limit: The number of entries to retrieve (default is 50).
+        limit: The number of entries to retrieve (e.g. 50).
     """
     uid = current_user_id.get()
     return firestore_service.get_recent_entries(user_id=uid, limit=limit)
@@ -110,29 +110,29 @@ def get_mood_entries_by_date_range(start_date: str, end_date: str) -> list[dict]
     uid = current_user_id.get()
     return firestore_service.get_entries_by_date_range(user_id=uid, start_date_str=start_date, end_date_str=end_date)
 
-def get_mood_entries_by_emotion(emotion: str, limit: int = 20) -> list[dict]:
+def get_mood_entries_by_emotion(emotion: str, limit: int) -> list[dict]:
     """
     Retrieves mood entries that contain the specified emotion tag (e.g., 'Anxious', 'Sad', 'Happy', 'Exhausted').
     Use this when the user asks about occurrences of a specific emotion.
     
     Args:
         emotion: The specific emotion tag to filter by. Must be capitalized (e.g. 'Sad', 'Anxious', 'Loved', 'Content').
-        limit: The max number of entries to retrieve (default is 20).
+        limit: The max number of entries to retrieve (e.g. 20).
     """
     uid = current_user_id.get()
     return firestore_service.get_entries_by_emotion(user_id=uid, emotion=emotion, limit=limit)
 
-def run_mood_analytics(start_date: str = None, end_date: str = None) -> dict:
+def run_mood_analytics(start_date: str, end_date: str) -> dict:
     """
     Calculates deterministic mood averages and correlations between activities (reasons) or emotions and overall mood.
     Use this when the user asks questions about trends, correlations, or patterns (e.g., 'what makes me happy?', 'what activities associate with my best moods?').
     
     Args:
-        start_date: Optional start date in ISO format (e.g., 'YYYY-MM-DD').
-        end_date: Optional end date in ISO format (e.g., 'YYYY-MM-DD').
+        start_date: Start date in ISO format (e.g., 'YYYY-MM-DD'). Pass 'all' if no specific date range is needed.
+        end_date: End date in ISO format (e.g., 'YYYY-MM-DD'). Pass 'all' if no specific date range is needed.
     """
     uid = current_user_id.get()
-    if start_date and end_date:
+    if start_date != 'all' and end_date != 'all':
         entries = firestore_service.get_entries_by_date_range(user_id=uid, start_date_str=start_date, end_date_str=end_date)
     else:
         entries = firestore_service.get_recent_entries(user_id=uid, limit=100)
@@ -202,8 +202,9 @@ def generate_chat_response(messages: list[dict], user_id: str) -> str:
 
 def generate_chat_response_stream(messages: list[dict], user_id: str):
     """
-    Generator function that calls Gemini 2.5 Flash with streaming and automatic function calling,
-    yielding chunks of text as Server-Sent Events.
+    Generator function that runs a reactive streaming loop. It streams text tokens
+    in real-time, and if a tool call is requested by the model mid-stream, it executes
+    the tool, appends the output to the history, and restarts the stream.
     """
     if not client:
         raise ValueError("Gemini Client is not initialized. Please set GEMINI_API_KEY in your .env file.")
@@ -232,19 +233,80 @@ def generate_chat_response_stream(messages: list[dict], user_id: str):
                 run_mood_analytics,
                 run_period_comparison
             ],
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
             temperature=0.2
         )
         
-        # Use generate_content_stream to get tokens in real-time
-        response_stream = client.models.generate_content_stream(
-            model="gemini-2.5-flash",
-            contents=contents,
-            config=config
-        )
+        # Mapping table for manual tool execution
+        tools_map = {
+            "search_journal_entries": search_journal_entries,
+            "get_recent_mood_entries": get_recent_mood_entries,
+            "get_mood_entries_by_date_range": get_mood_entries_by_date_range,
+            "get_mood_entries_by_emotion": get_mood_entries_by_emotion,
+            "run_mood_analytics": run_mood_analytics,
+            "run_period_comparison": run_period_comparison,
+        }
         
-        for chunk in response_stream:
-            if chunk.text:
-                yield chunk.text
+        # Reactive streaming loop
+        while True:
+            response_stream = client.models.generate_content_stream(
+                model="gemini-2.5-flash",
+                contents=contents,
+                config=config
+            )
+            
+            has_tool_call = False
+            tool_calls = []
+            last_model_content = None
+            
+            for chunk in response_stream:
+                # Check if the chunk contains function call requests
+                if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
+                    for part in chunk.candidates[0].content.parts:
+                        if part.function_call:
+                            has_tool_call = True
+                            tool_calls.append(part.function_call)
+                            last_model_content = chunk.candidates[0].content
+                
+                # Stream text to client only if we haven't encountered a tool call yet
+                if not has_tool_call:
+                    try:
+                        if chunk.text:
+                            yield chunk.text
+                    except ValueError:
+                        pass
+            
+            # If a tool call was requested, execute it and restart the stream with updated context
+            if has_tool_call:
+                # Append the model's turn (which includes the function call request and any text generated)
+                if last_model_content:
+                    contents.append(last_model_content)
+                
+                # Execute each tool call requested by the model
+                for call in tool_calls:
+                    func = tools_map.get(call.name)
+                    if func:
+                        result = func(**call.args)
+                    else:
+                        result = f"Error: Tool '{call.name}' not found."
+                        
+                    # Append the tool's output response
+                    contents.append(
+                        types.Content(
+                            role="tool",
+                            parts=[
+                                types.Part.from_function_response(
+                                    name=call.name,
+                                    response={"result": result}
+                                )
+                            ]
+                        )
+                    )
+                # Restart loop to resume stream with the new tool output history
+                continue
+            else:
+                # No more tools requested, generation finished successfully!
+                break
                 
     finally:
         # Reset the context variable to prevent memory leaks

@@ -31,34 +31,35 @@ def serialize_doc(doc) -> dict:
 
 def get_recent_entries(user_id: str, limit: int = 50) -> list[dict]:
     """
-    Retrieves the most recent mood entries for a user, sorted in-memory
-    to avoid composite index errors during development.
+    Retrieves the most recent mood entries for a user, querying natively from Firestore.
     """
-    docs = db.collection('mood_entries').where('userId', '==', user_id).stream()
-    serialized = [serialize_doc(doc) for doc in docs]
-    
-    # Sort by timestamp descending
-    serialized.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
-    return serialized[:limit]
+    docs = (
+        db.collection('mood_entries')
+        .where('userId', '==', user_id)
+        .order_by('timestamp', direction=firestore.Query.DESCENDING)
+        .limit(limit)
+        .get()
+    )
+    return [serialize_doc(doc) for doc in docs]
 
 def get_entries_by_date_range(user_id: str, start_date_str: str, end_date_str: str) -> list[dict]:
     """
     Retrieves mood entries between start_date and end_date (ISO strings, e.g., 'YYYY-MM-DD').
-    Filters in-memory to prevent composite indexing constraints.
+    Queries natively from Firestore for sub-second performance.
     """
-    # Parse start and end as datetime objects at boundary points
-    start_dt = datetime.datetime.fromisoformat(start_date_str.split('T')[0])
-    end_dt = datetime.datetime.fromisoformat(end_date_str.split('T')[0]) + datetime.timedelta(days=1) - datetime.timedelta(seconds=1)
+    # Parse start and end as timezone-aware datetime objects in UTC to match Firestore native queries
+    start_dt = datetime.datetime.fromisoformat(start_date_str.split('T')[0]).replace(tzinfo=datetime.timezone.utc)
+    end_dt = (datetime.datetime.fromisoformat(end_date_str.split('T')[0]) + datetime.timedelta(days=1) - datetime.timedelta(seconds=1)).replace(tzinfo=datetime.timezone.utc)
 
-    docs = db.collection('mood_entries').where('userId', '==', user_id).stream()
-    serialized = []
+    docs = (
+        db.collection('mood_entries')
+        .where('userId', '==', user_id)
+        .where('timestamp', '>=', start_dt)
+        .where('timestamp', '<=', end_dt)
+        .get()
+    )
     
-    for doc in docs:
-        data = serialize_doc(doc)
-        dt = datetime.datetime.fromisoformat(data['timestamp'])
-        if start_dt <= dt <= end_dt:
-            serialized.append(data)
-            
+    serialized = [serialize_doc(doc) for doc in docs]
     # Sort chronologically
     serialized.sort(key=lambda x: x.get('timestamp', ''))
     return serialized
