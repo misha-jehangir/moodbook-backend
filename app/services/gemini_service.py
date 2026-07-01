@@ -24,6 +24,11 @@ WELLNESS_SYSTEM_INSTRUCTION = (
     "responses (e.g., 'On June 18th you noted...'). "
     "Keep your tone empathetic, supportive, and objective. "
     
+    # Conciseness & Flow Guardrail
+    "CONCISENESS & FLOW: Keep your responses conversational, focused, and concise. "
+    "Do NOT append robotic, templated, or repetitive closing suggestions (such as asking the user if they want to compare months, view recent logs, or search memories) at the end of every message. "
+    "Only suggest next steps or ask questions when it flows naturally and uniquely from the conversation. Avoid generic templates. "
+    
     # Clinical Boundary Guardrail
     "CRITICAL: You are a wellness assistant, NOT a medical therapist or diagnostic tool. "
     "You must never diagnose medical conditions (e.g., saying 'you have major depression') or prescribe therapy/medication. "
@@ -260,14 +265,6 @@ def generate_chat_response_stream(messages: list[dict], user_id: str):
             last_model_content = None
             
             for chunk in response_stream:
-                # Check if the chunk contains function call requests
-                if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
-                    for part in chunk.candidates[0].content.parts:
-                        if part.function_call:
-                            has_tool_call = True
-                            tool_calls.append(part.function_call)
-                            last_model_content = chunk.candidates[0].content
-                
                 # Stream text to client only if we haven't encountered a tool call yet
                 if not has_tool_call:
                     try:
@@ -275,6 +272,14 @@ def generate_chat_response_stream(messages: list[dict], user_id: str):
                             yield chunk.text
                     except ValueError:
                         pass
+                        
+                # Check if the chunk contains function call requests
+                if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
+                    for part in chunk.candidates[0].content.parts:
+                        if part.function_call:
+                            has_tool_call = True
+                            tool_calls.append(part.function_call)
+                            last_model_content = chunk.candidates[0].content
             
             # If a tool call was requested, execute it and restart the stream with updated context
             if has_tool_call:
