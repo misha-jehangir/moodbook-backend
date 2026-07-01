@@ -260,14 +260,6 @@ def generate_chat_response_stream(messages: list[dict], user_id: str):
             last_model_content = None
             
             for chunk in response_stream:
-                # Check if the chunk contains function call requests
-                if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
-                    for part in chunk.candidates[0].content.parts:
-                        if part.function_call:
-                            has_tool_call = True
-                            tool_calls.append(part.function_call)
-                            last_model_content = chunk.candidates[0].content
-                
                 # Stream text to client only if we haven't encountered a tool call yet
                 if not has_tool_call:
                     try:
@@ -275,6 +267,14 @@ def generate_chat_response_stream(messages: list[dict], user_id: str):
                             yield chunk.text
                     except ValueError:
                         pass
+                        
+                # Check if the chunk contains function call requests
+                if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
+                    for part in chunk.candidates[0].content.parts:
+                        if part.function_call:
+                            has_tool_call = True
+                            tool_calls.append(part.function_call)
+                            last_model_content = chunk.candidates[0].content
             
             # If a tool call was requested, execute it and restart the stream with updated context
             if has_tool_call:
